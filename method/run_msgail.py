@@ -9,6 +9,7 @@ import os
 import numpy as np
 from utils.utils import rl_keys
 import gym
+from tensorboardX import SummaryWriter
 from multiprocessing import Pool
 from multiprocessing import Process
 from functions.gail import gail
@@ -27,6 +28,9 @@ parser.add_argument('--process_num', default=20, type=int)
 parser.add_argument('--points_num', default=10000, type=int)
 parser.add_argument('--file_name', default="file.npy", type=str)
 parser.add_argument('--seed', default=1, type=int)
+parser.add_argument('--horizon', default=3, type=int)
+parser.add_argument('--reward', default="gail", type=str)
+
 
 
 args = parser.parse_args()
@@ -93,6 +97,43 @@ def worker():
                 v = pi.get_value(s_)
                 real_next = traj_batch["value"][1:] + [np.array(v)]
 
+
+                new_reward_list = np.zeros_like(np.array(traj_batch["reward"]))
+                traj_len = len(traj_batch["state"])
+
+                state_list = []
+                state__list = []
+                complete_data_index = traj_len - args.horizon
+                for index in range(traj_len):
+                    if index <= complete_data_index:
+                        for j in range(args.horizon):
+                            state_ = traj_batch["state_"][index + j].copy().tolist()
+
+                            state_list.append(traj_batch["state"][index])
+                            state__list.append(state_)
+
+                            batch["gail_state"].append(traj_batch["state"][index])
+                            batch["gail_state_"].append(state_)
+                    else:
+                        state_ = traj_batch["state_"][index].copy().tolist()
+
+                        state_list.append(traj_batch["state"][index])
+                        state__list.append(state_)
+
+                        batch["gail_state"].append(traj_batch["state"][index])
+                        batch["gail_state_"].append(state_)
+
+                D_reward = pi.get_batch_reward(state_list, state__list)
+
+                for i in range(traj_len):
+                    if i <= complete_data_index:
+                        new_reward_list[i] = D_reward[(i * args.horizon):(
+                                i * args.horizon + args.horizon)].max()
+                    else:
+                        new_reward_list[i] = D_reward[i - traj_len]
+
+                traj_batch["reward"] = new_reward_list.tolist()
+
                 ret = pi.get_return(traj_batch["reward"])
 
                 gae = pi.get_gaes(traj_batch["reward"], traj_batch["value"], real_next)
@@ -103,6 +144,8 @@ def worker():
                 batch["action"].append(traj_batch["actions"])
                 batch["gae"].append(gae)
                 batch["return"].append(ret)
+                batch["D_reward"].append(sum(traj_batch["reward"]))
+                batch["D_mean_reward"].append(sum(traj_batch["reward"])/len(traj_batch["reward"]))
                 batch["trajectory_len"].append(len(traj_batch["state"]))
 
                 break
@@ -136,12 +179,20 @@ def train(batch, iter):
     pi = gail(have_model=True, need_log=True, action_space=act_dim, state_space=obs_dim)
     pi.train(batch)
 
-    gail_epoch = 1 if iter > 10 else 10
+    gail_epoch = 5 if iter > 10 else 20
 
+    d_loss = []
+    fa = []
+    ra = []
     for _ in range(gail_epoch):
-        pi.train_discriminator(expert_samples, batch)
+        ret = pi.train_discriminator(expert_samples, batch)
+        d_loss.append(ret["d_loss"])
+        fa.append(ret["fa"])
+        ra.append(ret["ra"])
 
     pi.save_model()
+
+    return dict(d_loss=np.array(d_loss).mean(),fa=np.array(fa).mean(), ra=np.array(ra).mean())
 
 def create_model():
     pi = gail(have_model=False, need_log=False, action_space=act_dim, state_space=obs_dim)
@@ -251,6 +302,8 @@ if __name__ == "__main__":
 
     iter = 0
     reward_list = []
+    import datetime
+    writer = SummaryWriter("./tbfile/{}".format(datetime.datetime.now().strftime('%Y-%m-%d%H:%M:%S')))
 
     for _ in range(300):
         iter += 1
@@ -278,11 +331,27 @@ if __name__ == "__main__":
             for key in rl_keys:
                 batch[key] += res[key]
 
-        pro = Process(target=train, args=(batch, iter,))
-        pro.start()
-        pro.join()
+        p = Pool(1)
+        results = []
+
+        for i in range(1):
+            results.append(p.apply_async(train, args=(batch, iter,)))
+
+        p.close()
+        p.join()
+
+        for res in results:
+            ret = res.get()
 
         first_step_return = np.array(batch["sum_reward"])
+        D_reward = np.array(batch["D_reward"])
+        D_mean_reward = np.array(batch["D_mean_reward"])
+        writer.add_scalar("reward/mujoco_reward", first_step_return.mean(),iter)
+        writer.add_scalar("reward/D_reward", D_reward.mean(),iter)
+        writer.add_scalar("reward/D_mean_reward", D_mean_reward.mean(),iter)
+        writer.add_scalar("D/d_loss", ret["d_loss"],iter)
+        writer.add_scalar("D/fake_accuracy", ret["fa"],iter)
+        writer.add_scalar("D/real_accuracy", ret["ra"],iter)
         reward_list.append(first_step_return.mean())
 
-    np.save(args.file_name, reward_list)
+    writer.close()

@@ -28,6 +28,8 @@ parser.add_argument('--points_num', default=10000, type=int)
 parser.add_argument('--file_name', default="file.npy", type=str)
 parser.add_argument('--seed', default=1, type=int)
 parser.add_argument('--reward', default="gail", type=str)
+parser.add_argument('--horizon', default=3, type=int)
+
 
 
 args = parser.parse_args()
@@ -173,6 +175,12 @@ def get_expert_samples():
         "state_":[]
     }
 
+    import  random
+    seed = random.randint(0,10000)
+    env.seed(seed)
+    print('seed:',seed)
+
+
     game_num = 0
     while game_num < 1:
 
@@ -200,6 +208,8 @@ def get_expert_samples():
                 batch["state"].append(traj_batch["state"])
                 batch["action"].append(traj_batch["action"])
                 batch["state_"].append(traj_batch["state_"])
+
+                # print(traj_batch["state"][:10])
 
                 break
 

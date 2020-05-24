@@ -83,7 +83,7 @@ class gail():
 
         self.lamda = hype_parameters["lamda"]
         self.gamma = hype_parameters["gamma"]
-        self.batch_size = 5000
+        self.batch_size = 512
         self.epoch_num = hype_parameters["epoch_num"]
         self.clip_value = hype_parameters["clip_value"]
         self.c_1 = hype_parameters["c_1"]
@@ -197,9 +197,9 @@ class gail():
                     traj_len_summary = tf.summary.scalar("trajectory_length",
                                                          tf.reduce_mean(self.trajectory_len))
 
-                    # self.policy_merge = tf.summary.merge(
-                    #     [lr_summary, al_summary, cl_summary, ret_summary, traj_len_summary, ent_summary])
-                    self.policy_merge = tf.summary.merge_all()
+                    self.policy_merge = tf.summary.merge(
+                        [lr_summary, al_summary, cl_summary, ret_summary, traj_len_summary, ent_summary])
+                    # self.policy_merge = tf.summary.merge_all()
 
             with tf.variable_scope('gail_discriminator'):
 
@@ -236,14 +236,14 @@ class gail():
 
                 self.train_dis = tf.train.AdamOptimizer(learning_rate=hype_parameters["d_lr"]).minimize(self.discriminator_loss)
 
-                fake_accuracy = tf.reduce_mean(tf.to_float(tf.nn.sigmoid(self.d_fake_logit) < 0.5))
-                real_accuracy = tf.reduce_mean(tf.to_float(tf.nn.sigmoid(self.d_real_logit) > 0.5))
+                self.fake_accuracy = tf.reduce_mean(tf.to_float(tf.nn.sigmoid(self.d_fake_logit) < 0.5))
+                self.real_accuracy = tf.reduce_mean(tf.to_float(tf.nn.sigmoid(self.d_real_logit) > 0.5))
 
             if self.need_log:
                 with tf.name_scope("gail_summary"):
                     d_loss = tf.summary.scalar("discriminator_loss", self.discriminator_loss)
-                    fake_accu = tf.summary.scalar("accuracy/fake_accuracy", fake_accuracy)
-                    real_accu = tf.summary.scalar("accuracy/real_accuracy", real_accuracy)
+                    fake_accu = tf.summary.scalar("accuracy/fake_accuracy", self.fake_accuracy)
+                    real_accu = tf.summary.scalar("accuracy/real_accuracy", self.real_accuracy)
 
                     self.dis_merge = tf.summary.merge([d_loss, fake_accu, real_accu])
                     # self.dis_merge = tf.summary.merge_all()
@@ -422,21 +422,21 @@ class gail():
                     start += self.batch_size
                     end = min(start + self.batch_size, sample_num)
 
-            # summary = self.sess.run(self.policy_merge, feed_dict={
-            #     self.trajectory_len: trajectory_len,
-            #     self.first_step_return: first_step_return,
-            #     self.batch_actor_loss: np.array(actor_loss, dtype=np.float32),
-            #     self.batch_critic_loss: np.array(critic_loss, dtype=np.float32),
-            #     self.batch_lr: np.array(learning_r, dtype=np.float32),
-            #     self.batch_entropy: np.array(entropy, dtype=np.float32)
-            # })
-            # self.summary.add_summary(summary, self.policy_training_times)
-            # self.policy_training_times += 1
+            summary = self.sess.run(self.policy_merge, feed_dict={
+                self.trajectory_len: trajectory_len,
+                self.first_step_return: first_step_return,
+                self.batch_actor_loss: np.array(actor_loss, dtype=np.float32),
+                self.batch_critic_loss: np.array(critic_loss, dtype=np.float32),
+                self.batch_lr: np.array(learning_r, dtype=np.float32),
+                self.batch_entropy: np.array(entropy, dtype=np.float32)
+            })
+            self.summary.add_summary(summary, self.policy_training_times)
+            self.policy_training_times += 1
 
     def train_discriminator(self, expert_samples, fake_batch):
 
-        s = np.vstack(fake_batch["state"]).astype(np.float32)
-        s_ = np.vstack(fake_batch["state_"]).astype(dtype=np.float32)
+        s = np.vstack(fake_batch["gail_state"]).astype(np.float32)
+        s_ = np.vstack(fake_batch["gail_state_"]).astype(dtype=np.float32)
 
         fake_stack = np.hstack((s, s_))
 
@@ -448,19 +448,22 @@ class gail():
             "state_": s_
         }
 
-        self.train_discriminator_epoch(expert_samples.sample(fake_stack.shape[0]), this_batch)
+        ret = self.train_discriminator_epoch(expert_samples.sample(fake_stack.shape[0]), this_batch)
+        return ret
 
     def train_discriminator_epoch(self, real_batch, fake_batch):
         with self.sess.as_default(), self.sess.graph.as_default():
-            _, _ = self.sess.run([self.discriminator_loss, self.train_dis],
+            summary, d_loss,fa,ra, _ = self.sess.run([self.dis_merge, self.discriminator_loss, self.fake_accuracy, self.real_accuracy, self.train_dis],
                                           feed_dict={self.real_state: real_batch["state"],
                                                      self.real_state_: real_batch["state_"],
                                                      self.fake_state: fake_batch["state"],
                                                      self.fake_state_: fake_batch["state_"]
                                                      })
 
-        # self.summary.add_summary(summary, self.discriminator_training_times)
+        self.summary.add_summary(summary, self.discriminator_training_times)
         self.discriminator_training_times += 1
+
+        return dict(fa=fa,ra=ra,d_loss=d_loss)
 
 
     def get_reward(self, state, state_):
@@ -474,6 +477,16 @@ class gail():
                                                               self.fake_state_:state_})
 
         return float(reward[0])
+
+    def get_batch_reward(self, state, state_):
+        state = np.array(state).reshape([-1, self.state_space])
+        state_ = np.array(state_).reshape([-1, self.state_space])
+
+        with self.sess.as_default():
+            reward = self.sess.run(self.reward_op,feed_dict={self.fake_state :state,
+                                                               self.fake_state_:state_})
+
+        return reward
 
 
     def save_model(self):

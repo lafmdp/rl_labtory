@@ -10,7 +10,7 @@ import numpy as np
 from tensorflow.python.framework import graph_util
 import  tensorflow as tf
 
-rl_keys = ["state", "action", "state_", "reward", "gae", "return", "sum_reward", "trajectory_len"]
+rl_keys = ["state", "action", "state_", "reward", "gae", "return", "sum_reward", "trajectory_len", "gail_state","gail_state_", "D_reward", "D_mean_reward"]
 
 hype_parameters = {
     "gamma": 0.99,
