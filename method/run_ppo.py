@@ -7,8 +7,8 @@
 
 import os
 import numpy as np
-from utils.utils import run_with_process_pool, run_with_new_process
 import gym
+from tensorboardX import  SummaryWriter
 from multiprocessing import Pool, Process, Manager
 from functions.ppo import policy
 np.set_printoptions(threshold=np.inf)
@@ -27,7 +27,9 @@ parser = argparse.ArgumentParser(description="Running time configurations")
 parser.add_argument('--env', default="Walker2d-v2", type=str)
 parser.add_argument('--vg', default="-1", type=str)
 parser.add_argument('--process_num', default=30, type=int)
-parser.add_argument('--points_num', default=50000, type=int)
+parser.add_argument('--points_num', default=10000, type=int)
+parser.add_argument('--seed', default=1, type=int)
+
 
 args = parser.parse_args()
 
@@ -189,8 +191,10 @@ if __name__ == "__main__":
     iter = 0
 
     return_list = []
+    import datetime
+    writer = SummaryWriter("./tbfile/{}".format(datetime.datetime.now().strftime('%Y-%m-%d%H:%M:%S')))
 
-    for _ in range(300):
+    for _ in range(2000):
 
         t1 = time.time()
         iter += 1
@@ -227,8 +231,9 @@ if __name__ == "__main__":
         pro.join()
         first_step_return = np.array(batch["sum_reward"])
         return_list.append(first_step_return.mean())
+        writer.add_scalar("sum_of_traj_reward", first_step_return.mean(), iter)
 
         print("Time cosuming:",time.time()-t1)
         print('------------------------------------------------------------\n')
 
-    np.save('./constant.npy', return_list)
+    writer.close()
