@@ -34,7 +34,7 @@ args = parser.parse_args()
 run_template = "python -m method.generate_expert_policy " \
                "--process_num {} " \
                "--iteration_num 200 " \
-               "--env_list {}" \
+               "--env_list {} " \
                "--transfer_type {}"
 
 template = run_template
@@ -51,7 +51,7 @@ for env_name in args.env_list.split(";"):
                                env_name,
                                args.transfer_type)
     dir_name += 1
-    pane_str = "sleep {}s && ".format(sleep_inverval*i) + pane_str
+    pane_str = "sleep {}s && ".format(1) + pane_str
 
     if args.conda_name is not None:
         pane_str = "source activate {} && ".format(args.conda_name)+pane_str

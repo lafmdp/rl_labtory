@@ -282,16 +282,16 @@ class policy():
             trajectory_len = np.array(batch["trajectory_len"])
 
             traj_len = [len(s) for s in batch["state"]]
-            print('Return:')
-            print('length:\t%f, Mean:\t%f' % (sum(traj_len)/len(traj_len), first_step_return.mean()))
-            print('Max:\t%f, Min:\t%f' % (first_step_return.max(), first_step_return.min()))
+            # print('Return:')
+            # print('length:\t%f, Mean:\t%f' % (sum(traj_len)/len(traj_len), first_step_return.mean()))
+            # print('Max:\t%f, Min:\t%f' % (first_step_return.max(), first_step_return.min()))
 
             old_mean = self.sess.run(self.means, feed_dict={self.obs: state})
             old_mean = np.array(old_mean, dtype=np.float32).squeeze()
 
             s_s = self.state_space
             a_s = self.action_space
-            print("Sample Nums:",state.shape[0])
+            # print("Sample Nums:",state.shape[0])
 
             gae = gae[:, np.newaxis]
             ret = ret[:, np.newaxis]
