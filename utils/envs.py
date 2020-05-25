@@ -53,12 +53,6 @@ def get_source_env(env_name="Walker2d-v2"):
 
     return env
 
-def get_new_action_env(noise, env_name):
-    update_source_env(env_name)
-
-    env = action_noise_env(noise, env_name)
-
-    return env
 
 def get_new_density_env(variety, env_name):
 

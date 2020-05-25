@@ -4,18 +4,13 @@ import time
 import yaml
 # python generate_tmux_yaml.py --num_seeds 4 --env_names "Hopper-v2"
 parser = argparse.ArgumentParser(description='Process some parameters.')
-parser.add_argument(
-    '--num_seeds',
-    type=int,
-    default=3,
-    help='number of random seeds to generate')
+
 
 parser.add_argument(
     '--process_num',
     type=int,
-    default=5,
+    default=10,
     help='process Nums per panel')
-
 
 parser.add_argument(
     '--conda_name',
@@ -23,36 +18,48 @@ parser.add_argument(
     type=str,
     help='conda activate if needed')
 
+parser.add_argument(
+    '--transfer_type',
+    default="friction",
+    type=str)
+
+parser.add_argument(
+    '--env_list',
+    default="Walker2d-v2;Ant-v2;Hopper-v2;HalfCheetah-v2",
+    type=str)
+
+
 args = parser.parse_args()
 
-run_template = "python -m method.run_ppo " \
+run_template = "python -m method.generate_expert_policy " \
                "--process_num {} " \
-               "--seed {} "
-
+               "--iteration_num 200 " \
+               "--env_list {}" \
+               "--transfer_type {}"
 
 template = run_template
 dir_name = 0
 sleep_inverval = 1
 
-config = {"session_name": "compare-gail", "windows": []}
+config = {"session_name": "generate_expert", "windows": []}
 
-for reward_type in ["max"]:
+for env_name in args.env_list.split(";"):
 
     panes_list = []
-    for i in range(args.num_seeds):
 
+    pane_str = template.format(args.process_num,
+                               env_name,
+                               args.transfer_type)
+    dir_name += 1
+    pane_str = "sleep {}s && ".format(sleep_inverval*i) + pane_str
 
-        pane_str = template.format(args.process_num, i*1000)
-        dir_name += 1
-        pane_str = "sleep {}s && ".format(sleep_inverval*i) + pane_str
+    if args.conda_name is not None:
+        pane_str = "source activate {} && ".format(args.conda_name)+pane_str
 
-        if args.conda_name is not None:
-            pane_str = "source activate {} && ".format(args.conda_name)+pane_str
-
-        panes_list.append(pane_str)
+    panes_list.append(pane_str)
 
     config["windows"].append({
-        "window_name": "{}".format(reward_type),
+        "window_name": "{}".format(env_name),
         "panes": panes_list
     })
 
