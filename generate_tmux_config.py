@@ -25,11 +25,9 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-run_template = "python -m method.run_gail " \
+run_template = "python -m method.run_ppo " \
                "--process_num {} " \
-               "--seed {} " \
-               "--file_name {} " \
-               "--reward {}"
+               "--seed {} "
 
 
 template = run_template
@@ -38,16 +36,13 @@ sleep_inverval = 1
 
 config = {"session_name": "compare-gail", "windows": []}
 
-for reward_type in {"max", "plus", "multiply"}:
+for reward_type in ["max"]:
 
     panes_list = []
     for i in range(args.num_seeds):
 
 
-        pane_str = template.format(args.process_num,
-                                   i*1000,
-                                   "./result/{}_{}.npy".format(reward_type, i*1000),
-                                   reward_type)
+        pane_str = template.format(args.process_num, i*1000)
         dir_name += 1
         pane_str = "sleep {}s && ".format(sleep_inverval*i) + pane_str
 

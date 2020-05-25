@@ -18,7 +18,7 @@ hype_parameters = {
     "gamma": 0.99,
     "lamda": 0.95,
     "need_log": False,
-    "batch_size": 5000,
+    "batch_size": 512,
     "epoch_num": 10,
     "clip_value": 0.2,
     "c_1": 3,
