@@ -18,6 +18,8 @@ parser.add_argument('--env_list',default="Walker2d-v2;Ant-v2;Hopper-v2;HalfCheet
 parser.add_argument('--transfer_type',default="friction;gravity", type=str)
 parser.add_argument('--points_num', default=50000, type=int)
 parser.add_argument('--iteration_num', default=150, type=int)
+parser.add_argument('--variety_list', default="0.5;1.5;2.0", type=str)
+
 
 
 args = parser.parse_args()
@@ -223,7 +225,8 @@ if __name__ == '__main__':
         for env_name in args.env_list.split(";"):
             check_path("./expert/{}/{}".format(transfer_type,env_name))
 
-            for variety_degree in [0.5,1.5,2.0]:
+            for variety_degree in args.variety_list.split(";"):
+                variety_degree = float(variety_degree)
 
                 print("\n----------{}----------{}----------{}----------".format(transfer_type,env_name,variety_degree))
 
