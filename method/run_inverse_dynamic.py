@@ -15,6 +15,7 @@
 import os
 import gym#; print("\n".join(['- ' + spec.id for spec in gym.envs.registry.all() if spec.id.startswith('Roboschool')]))
 import numpy as np
+import random
 from functions.customized_mujuco import self_mujuco
 from utils.replay_buffer import SAS_Buffer
 from utils.utils import *
@@ -27,8 +28,30 @@ tf.logging.set_verbosity(tf.logging.ERROR)
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = "3"
 
-process_num = 25
-model_path = './Documents/success/walker2d/policy'
+process_num = 10
+
+
+key_list = [
+    "state","action","state_",
+    "ms_state","ms_action","ms_state_"
+]
+
+import  argparse
+
+parser = argparse.ArgumentParser(description="Running time configurations")
+
+parser.add_argument('--env', default="Walker2d-v2", type=str)
+parser.add_argument('--vg', default="1", type=str)
+parser.add_argument('--process_num', default=20, type=int)
+parser.add_argument('--points_num', default=10000, type=int)
+parser.add_argument('--file_name', default="file.npy", type=str)
+parser.add_argument('--seed', default=1, type=int)
+parser.add_argument('--expert_traj_num', default=1, type=int)
+parser.add_argument('--horizon', default=5, type=int)
+
+args = parser.parse_args()
+model_path = './Documents/success/{}/policy'.format(args.env.lower().split("-")[0])
+
 
 result = []
 
@@ -55,7 +78,7 @@ def sampleEnv(points_num, share_lock):
         }
 
         while True:
-            if points_num.value > 5:
+            if points_num.value > args.expert_traj_num:
                 return batch
 
             means = pi.get_means(s)
@@ -81,6 +104,68 @@ def sampleEnv(points_num, share_lock):
 
                 break
 
+def sampleMSEnv(points_num, share_lock):
+
+    pi = existing_pi(model_path=model_path)
+
+    batch = {}
+    for key in key_list:
+        batch[key] = []
+
+    while True:
+
+        s = env.reset()
+
+        traj_batch = {
+            "state": [],
+            "action": [],
+            "state_": []
+        }
+        sum_reward = 0
+
+        while True:
+            if points_num.value >= args.expert_traj_num:
+                return batch
+
+            means = pi.get_means(s)
+
+            s_, r, done, _ = env.step(means * high)
+            sum_reward += r
+
+            traj_batch["state"].append(s)
+            traj_batch["action"].append(means)
+            traj_batch["state_"].append(s_)
+            s = s_
+
+            if done:
+                if sum_reward < 2000:
+                    break
+                else:
+                    share_lock.acquire()
+                    points_num.value += 1
+                    share_lock.release()
+
+                    traj_len = len(traj_batch["state"])
+                    for index in range(traj_len):
+                        for i in range(args.horizon):
+                            if index + i >= traj_len:
+                                break
+
+                            batch["ms_state"].append(traj_batch["state"][index])
+                            batch["ms_action"].append(traj_batch["action"][index])
+                            state_ = traj_batch["state_"][index + i].copy().tolist()
+                            batch["ms_state_"].append(state_)
+
+                    batch["state"].append(traj_batch["state"])
+                    batch["state_"].append(traj_batch["state_"])
+                    batch["action"].append(traj_batch["action"])
+
+                    print("Expert Traj Reward:",sum_reward)
+
+                    break
+
+
+
 def trainIdWorker():
     """
     Train inverse dynamic model for expert on the target.
@@ -91,21 +176,12 @@ def trainIdWorker():
                           state_dim=obs_dim,
                           act_dim=act_dim)
 
-    id_data = expert_target_samples.collect_all_samples()
-    sample_num = id_data.shape[0]
-    train_index = np.random.choice(sample_num, round(sample_num * 0.8), replace=False).tolist()
-    test_index = np.array(list(set(range(sample_num)) - set(train_index)))
+    id_data = id_expert_samples.collect_all_samples()
 
-    train_data = id_data[train_index]
-    test_data = id_data[test_index]
+    for i in range(20000):
+        idt.train(id_expert_samples.specific_sample(id_data))
 
-    i = 0
-    while i < 15000:
-        idt.train(expert_target_samples.specific_sample(id_data))
-
-        i += 1
-
-    print("Trainning id in %d epoch(s)" % (i))
+    print("Trainning id in 20000 epoch(s)")
 
     idt.save_model()
 
@@ -120,19 +196,12 @@ def trainBcWorker():
                           state_dim=obs_dim,
                           act_dim=act_dim)
 
-    id_data = expert_target_samples.collect_all_samples()
-    sample_num = id_data.shape[0]
-    train_index = np.random.choice(sample_num, round(sample_num * 0.8), replace=False).tolist()
+    id_data = bc_expert_samples.collect_all_samples()
 
-    train_data = id_data[train_index]
+    for _ in range(20000):
+        bcm.train(bc_expert_samples.specific_sample(id_data))
 
-    i = 0
-    while i < 15000:
-        bcm.train(expert_target_samples.specific_sample(train_data))
-
-        i += 1
-
-    print("Trainning bc in %d epoch(s)" % (i))
+    print("Trainning bc in 20000 epoch(s)")
 
     bcm.save_model()
 
@@ -188,14 +257,14 @@ def evaluateWorker(perform_type: str, eva_num, share_lock):
         sum_reward = 0
 
         while True:
-            if eva_num.value > 50:
+            if eva_num.value > 100:
                 return batch
 
             if perform_type == "id":
-                virtual_action = po.get_means(s)
+                virtual_action = po.get_action(s)
                 s_pred,_,_,_ = ground_truth_transition.forward(env.sim.get_state(), virtual_action)#+np.random.normal(0, std,virtual_action.shape))
-                s_pred = np.array(s_pred)
-                s_pred = np.random.normal(s_pred, std, s_pred.shape)
+                # s_pred = np.array(s_pred)
+                # s_pred = np.random.normal(s_pred, std, s_pred.shape)
                 ret = idm.get_action(s, s_pred)
                 a = ret["actions"]
             else:
@@ -253,6 +322,7 @@ def evaluate(perform_type):
 
 
 if __name__ == "__main__":
+
     env = gym.make("Walker2d-v2")
     ground_truth_transition = self_mujuco("Walker2d-v2")
 
@@ -263,55 +333,44 @@ if __name__ == "__main__":
 
     idm_path = "./tmp"
 
-    # print("Observe expert performance")
-    # evaluate("policy")
-
-    for traj_num in range(10):
-        print("\n\n----------------- tranjectory nums:%d -----------------\n" % (traj_num+1))
+    for traj_num in range(1, 11, 2):
+        print("------------trajnum:%d-------------"%3)
+        args.expert_traj_num = 3
 
         run_with_new_process(initNetworks)
-        std = traj_num/5
 
-        expert_target_samples = SAS_Buffer(obs_dim, act_dim, size=1, batch_size=300)
+        id_expert_samples = SAS_Buffer(obs_dim, act_dim, size=1, batch_size=300)
+        bc_expert_samples = SAS_Buffer(obs_dim, act_dim, size=1, batch_size=300)
 
         p = Pool(process_num)
 
-        batch = \
-            {
-                "state": [],
-                "action": [],
-                "state_": []
-            }
+        batch = {}
+        for key in key_list:
+            batch[key] = []
 
         points_num = Manager().Value("l", 0)
         share_lock = Manager().Lock()
         results = []
 
         for i in range(process_num):
-            results.append(p.apply_async(sampleEnv, args=(points_num, share_lock,)))
+            results.append(p.apply_async(sampleMSEnv, args=(points_num, share_lock,)))
 
         p.close()
         p.join()
 
         for res in results:
             res = res.get()
-            batch["state"] += res["state"]
-            batch["action"] += res["action"]
-            batch["state_"] += res["state_"]
+            for key in key_list:
+                batch[key] += res[key]
 
-        expert_target_samples.append(batch["state"], batch["action"], batch["state_"])
+        id_expert_samples.append(batch["ms_state"], batch["ms_action"], batch["ms_state_"])
+        bc_expert_samples.append(batch["state"], batch["action"], batch["state_"])
 
-        # expert_target_samples.buffer = np.load("./data.npy")[:sample_num,:]
-
+        run_with_new_process(trainBcWorker)
         run_with_new_process(trainIdWorker)
-        # run_with_new_process(trainBcWorker)
-
         print("Observe inverse dynamic performance")
         evaluate("id")
 
-        # print("Observe behavior cloning performance")
-        # evaluate("bc")
-        print("--------------------------------------------------")
-
-    np.save("./result_traj_1.npy", result)
-
+        print("Observe behavior cloning performance")
+        evaluate("bc")
+        print("--------------------------------------------------\n\n")

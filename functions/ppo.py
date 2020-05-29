@@ -18,7 +18,7 @@ hype_parameters = {
     "gamma": 0.99,
     "lamda": 0.95,
     "need_log": False,
-    "batch_size": 4096,
+    "batch_size": 5000,
     "epoch_num": 10,
     "clip_value": 0.2,
     "c_1": 3,
@@ -124,6 +124,7 @@ class policy():
                                        tf.truncated_normal(shape=(self.action_space,)))
 
                         self.sampled_act = tf.clip_by_value(sampled_act, -1, 1)
+                        print(self.sampled_act.name)
 
                     with tf.variable_scope('value'):
                         out2 = tf.layers.dense(inputs=self.obs, units=128, activation=tf.nn.relu)
@@ -282,16 +283,16 @@ class policy():
             trajectory_len = np.array(batch["trajectory_len"])
 
             traj_len = [len(s) for s in batch["state"]]
-            # print('Return:')
-            # print('length:\t%f, Mean:\t%f' % (sum(traj_len)/len(traj_len), first_step_return.mean()))
-            # print('Max:\t%f, Min:\t%f' % (first_step_return.max(), first_step_return.min()))
+            print('Return:')
+            print('length:\t%f, Mean:\t%f' % (sum(traj_len)/len(traj_len), first_step_return.mean()))
+            print('Max:\t%f, Min:\t%f' % (first_step_return.max(), first_step_return.min()))
 
             old_mean = self.sess.run(self.means, feed_dict={self.obs: state})
             old_mean = np.array(old_mean, dtype=np.float32).squeeze()
 
             s_s = self.state_space
             a_s = self.action_space
-            # print("Sample Nums:",state.shape[0])
+            print("Sample Nums:",state.shape[0])
 
             gae = gae[:, np.newaxis]
             ret = ret[:, np.newaxis]
@@ -369,3 +370,6 @@ class policy():
     def load_model(self):
         with self.sess.as_default(), self.graph.as_default():
             self.saver.restore(self.sess, save_path=os.path.join(self.model_path, self.model_name))
+
+if __name__ == '__main__':
+    a = policy()
