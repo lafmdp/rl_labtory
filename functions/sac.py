@@ -18,29 +18,11 @@ nowTime = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 hype_parameters = {
     "gamma": 0.99,
     "need_log": False,
-    "init_lr": 3e-4,
+    "init_lr": 1e-3,
     "polyak": 0.995,
     "alpha_auto": True,
     "target_entropy_auto": True
 }
-
-'''
-:param state_space: 状态空间大小
-:param action_space:  动作空间大小
-:param gamma:  默认0.99
-:param lamda:   默认0.95
-:param log_path:  tensorboard 文件路径
-:param model_path:  tensorflow model 路径
-:param use_model:  是否已经有现成模型，初始化时设为False， 使用或训练时设为True
-:param need_log:  是否需要log，训练时设为True，使用时设为False
-:param batch_size:  训练时一个batch的大小，可以调
-:param epoch_num:  一批样本的训练轮数，可以调
-:param clip_value:  默认0.2
-:param c_1:  value function的系数，可以调
-:param c_2:  entropy的系数，可以调
-:param lr:  学习率
-:param lr_epsilon: Adam的超参
-'''
 
 
 class policy():

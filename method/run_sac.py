@@ -10,8 +10,8 @@ import numpy as np
 import gym
 from multiprocessing import Pool
 from multiprocessing import Process
-from functions.sac import policy
-from utils.replay_buffer import SAC_Buffer
+
+from functions.sac_continuous import  policy, ReplayBuffer
 from utils.utils import run_with_new_process, run_with_process_pool
 
 np.set_printoptions(threshold=np.inf)
@@ -27,10 +27,10 @@ if not os.path.exists("./Documents/PolicyModel"):
 
 parser = argparse.ArgumentParser(description="Running time configurations")
 
-parser.add_argument('--env', default="CartPole-v1", type=str)
+parser.add_argument('--env', default="Hopper-v2", type=str)
 parser.add_argument('--vg', default="-1", type=str)
-parser.add_argument('--process_num', default=5, type=int)
-parser.add_argument('--points_num', default=1000, type=int)
+parser.add_argument('--process_num', default=10, type=int)
+parser.add_argument('--points_num', default=5000, type=int)
 
 args = parser.parse_args()
 
@@ -38,11 +38,10 @@ tf.logging.set_verbosity(tf.logging.ERROR)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = "3"
 os.environ["CUDA_VISIBLE_DEVICES"] = args.vg
 
-env_name = "MountainCar-v0"
 process_num = args.process_num
 points_per_process = args.points_num/process_num
 
-rl_keys = ["state", "action", "state_", "reward", "sum_reward", "done", "traj_len", "return"]
+
 
 
 def worker():
@@ -74,7 +73,6 @@ def worker():
 
             s_, r, done, _ = env.step(a)
 
-            r *= (1-pi.gamma)
 
             traj_batch["state"].append(s)
             traj_batch["state_"].append(s_)
@@ -104,8 +102,8 @@ def worker():
 def train():
 
     pi = policy(have_model=True, need_log=True, action_space=act_dim, state_space=obs_dim)
-    for _ in range(args.points_num):
-        pi.train(buffer.sample())
+    for _ in range(100):
+        pi.train(buffer.sample_batch())
     pi.save_model()
 
 def create_model():
@@ -113,15 +111,18 @@ def create_model():
     pi.save_model()
 
 if __name__ == "__main__":
+    rl_keys = ["state", "action", "state_", "reward", "sum_reward", "done", "traj_len", "return"]
 
     env = gym.make(args.env)
 
-    obs_dim = env.observation_space.shape[0]
-    act_dim = 2
-    buffer = SAC_Buffer(obs_dim, act_dim,size=10000, batch_size=256)
+    obs_dim = int(env.observation_space.shape[0])
+    act_dim = int(env.action_space.shape[0])
+
+    buffer = ReplayBuffer(obs_dim, act_dim, size=100000)
 
     print('Env Name:',args.env)
     print("obs_space:", obs_dim)
+    print("action:", act_dim)
 
     run_with_new_process(create_model)
 
@@ -136,7 +137,7 @@ if __name__ == "__main__":
 
         batch = run_with_process_pool(worker, rl_keys, args.process_num)
 
-        buffer.append(batch)
+        buffer.store(batch)
         print("sum reward:", np.hstack(batch["sum_reward"]).mean())
         print("average length:", np.hstack(batch["traj_len"]).mean())
 
