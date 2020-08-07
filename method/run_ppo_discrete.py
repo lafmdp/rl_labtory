@@ -1,20 +1,14 @@
-'''
-  
-  @python version : 3.6.8
-  @author : pangjc
-  @time : 2019/8/25
-'''
 
 import os
 import numpy as np
 import gym
+from functions.ppo_discrete import policy
 from tensorboardX import  SummaryWriter
 from multiprocessing import Pool, Process, Manager
-from functions.ppo import policy
 np.set_printoptions(threshold=np.inf)
 
 import tensorflow as tf
-import  argparse
+import argparse
 import time
 
 if not os.path.exists("./Documents"):
@@ -24,10 +18,10 @@ if not os.path.exists("./Documents/PolicyModel"):
 
 parser = argparse.ArgumentParser(description="Running time configurations")
 
-parser.add_argument('--env', default="Walker2d-v2", type=str)
+parser.add_argument('--env', default="MountainCar-v0", type=str)
 parser.add_argument('--vg', default="-1", type=str)
 parser.add_argument('--process_num', default=15, type=int)
-parser.add_argument('--points_num', default=4096, type=int)
+parser.add_argument('--points_num', default=1024, type=int)
 parser.add_argument('--seed', default=1, type=int)
 
 
@@ -39,33 +33,10 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.vg
 
 rl_keys = ["state", "action", "state_", "reward", "gae", "return", "sum_reward", "trajectory_len"]
 
-import random
-
-# def set_global_seeds(i):
-#     try:
-#         from mpi4py import MPI
-#         rank = MPI.COMM_WORLD.Get_rank()
-#     except ImportError:
-#         rank = 0
-#
-#     myseed = i  + 1000 * rank if i is not None else None
-#     try:
-#         import tensorflow as tf
-#         tf.set_random_seed(myseed)
-#     except ImportError:
-#         pass
-#     np.random.seed(myseed)
-#     random.seed(myseed)
-#
-# set_global_seeds(10)
 
 def worker(points_num, share_lock):
 
-    obs_dim = env.observation_space.shape[0]
-    act_dim = env.action_space.shape[0]
-    high = env.action_space.high
-
-    pi = policy(have_model=True, need_log=False, action_space=act_dim, state_space=obs_dim)
+    pi = policy(have_model=True, action_space=act_dim, state_space=obs_dim)
 
     batch = {}
     for key in rl_keys:
@@ -93,9 +64,7 @@ def worker(points_num, share_lock):
             ret = pi.get_action(s)
             a = ret["actions"]
 
-            s_, r, done, info = env.step(a * high[0])
-
-            r *= (1-pi.gamma)
+            s_, r, done, info = env.step(a)
 
             traj_batch["state"].append(s)
             traj_batch["reward"].append(r)
@@ -120,8 +89,8 @@ def worker(points_num, share_lock):
                 batch["action"].append(traj_batch["actions"])
                 batch["gae"].append(gae)
                 batch["return"].append(ret)
+                # batch["sum_reward"].append(ret[0])
                 batch["trajectory_len"].append(len(traj_batch["state"]))
-                # batch["sum_reward"].append(sum(traj_batch["reward"]))
 
                 share_lock.acquire()
                 points_num.value += len(traj_batch["state"])
@@ -144,7 +113,7 @@ def worker(points_num, share_lock):
 
             a = pi.get_means(s)
 
-            s_, r, done, info = env.step(a * high[0])
+            s_, r, done, info = env.step(a)
 
             traj_batch["reward"].append(r)
 
@@ -163,12 +132,12 @@ def worker(points_num, share_lock):
 
 def train(batch):
 
-    pi = policy(have_model=True, need_log=True, action_space=act_dim, state_space=obs_dim)
+    pi = policy(have_model=True, action_space=act_dim, state_space=obs_dim)
     pi.train(batch)
     pi.save_model()
 
 def create_model():
-    pi = policy(have_model=False, need_log=False, action_space=act_dim, state_space=obs_dim)
+    pi = policy(have_model=False, action_space=act_dim, state_space=obs_dim)
     pi.save_model()
 
 if __name__ == "__main__":
@@ -176,13 +145,11 @@ if __name__ == "__main__":
     env = gym.make(args.env)
 
     obs_dim = env.observation_space.shape[0]
-    act_dim = env.action_space.shape[0]
+    act_dim = 2
 
     print('Env Name:%s'%args.env)
     print("obs_space:", obs_dim)
-    print("act_space:", act_dim)
-    print("act_high:", env.action_space.high)
-    print("act_low:", env.action_space.low)
+    print("act_space:", env.action_space)
 
     p = Process(target=create_model)
     p.start()
@@ -194,6 +161,8 @@ if __name__ == "__main__":
     import datetime
     writer = SummaryWriter("./tbfile/{}".format(datetime.datetime.now().strftime('%Y-%m-%d%H:%M:%S')))
 
+    sample_cost = 0
+
     for _ in range(2000):
 
         t1 = time.time()
@@ -201,7 +170,6 @@ if __name__ == "__main__":
 
         print('\n---------------------------- Iteration %d --------------------------------'%iter)
 
-        #batch = run_with_process_pool(worker, rl_keys, args.process_num)
         p = Pool(args.process_num)
 
         batch = {}
@@ -231,9 +199,10 @@ if __name__ == "__main__":
         pro.join()
         first_step_return = np.array(batch["sum_reward"])
         return_list.append(first_step_return.mean())
-        writer.add_scalar("sum_of_traj_reward", first_step_return.mean(), iter)
+        sample_cost += np.vstack(batch["state"]).shape[0]
+        writer.add_scalar("sum_of_traj_reward", first_step_return.mean(), sample_cost)
 
-        print("Time cosuming:",time.time()-t1)
+        print("Time cosuming:",time.time()-t1, "sample cost:", sample_cost)
         print('------------------------------------------------------------\n')
 
     writer.close()

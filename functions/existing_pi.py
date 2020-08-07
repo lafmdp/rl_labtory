@@ -20,7 +20,8 @@ class existing_pi():
 
             graph = tf.get_default_graph()
             self.state_input = graph.get_tensor_by_name('policy/obs:0')
-            self.action = graph.get_tensor_by_name('policy/Net/action/means/Tanh:0')
+            self.deterministic_action = graph.get_tensor_by_name('policy/Net/action/means/Tanh:0')
+            self.stochastic_action = graph.get_tensor_by_name('policy/Net/action/clip_by_value:0')
 
 
     def get_means(self, state):
@@ -29,6 +30,16 @@ class existing_pi():
         state = state[np.newaxis, :]
 
         with self.sess.as_default():
-            a = self.sess.run(self.action, feed_dict={self.state_input:state})[0]
+            a = self.sess.run(self.stochastic_action, feed_dict={self.state_input:state})[0]
+
+        return a
+
+    def get_action(self, state):
+
+        state = np.array(state)
+        state = state[np.newaxis, :]
+
+        with self.sess.as_default():
+            a = self.sess.run(self.deterministic_action, feed_dict={self.state_input:state})[0]
 
         return a

@@ -19,6 +19,7 @@ args = parser.parse_args()
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
+
 def generate_xml_path():
     import sys
     path = sys.path

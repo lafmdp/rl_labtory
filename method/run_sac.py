@@ -102,7 +102,7 @@ def worker():
 def train():
 
     pi = policy(have_model=True, need_log=True, action_space=act_dim, state_space=obs_dim)
-    for _ in range(100):
+    for _ in range(2000):
         pi.train(buffer.sample_batch())
     pi.save_model()
 
