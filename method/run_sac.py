@@ -11,7 +11,7 @@ import gym
 from multiprocessing import Pool
 from multiprocessing import Process
 
-from functions.sac_continuous import  policy, ReplayBuffer
+from functions.sac import policy, ReplayBuffer
 from utils.utils import run_with_new_process, run_with_process_pool
 
 np.set_printoptions(threshold=np.inf)

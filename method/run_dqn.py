@@ -2,7 +2,7 @@
 import os
 import numpy as np
 import gym
-from functions.ppo_discrete import policy
+from functions.DQN import policy, replay_buffer
 from tensorboardX import  SummaryWriter
 from multiprocessing import Pool, Process, Manager
 np.set_printoptions(threshold=np.inf)
@@ -18,9 +18,9 @@ if not os.path.exists("./Documents/PolicyModel"):
 
 parser = argparse.ArgumentParser(description="Running time configurations")
 
-parser.add_argument('--env', default="Kangaroo-ram-v0", type=str)
+parser.add_argument('--env', default="CartPole-v0", type=str)
 parser.add_argument('--vg', default="-1", type=str)
-parser.add_argument('--process_num', default=10, type=int)
+parser.add_argument('--process_num', default=15, type=int)
 parser.add_argument('--points_num', default=10240, type=int)
 parser.add_argument('--seed', default=1, type=int)
 
@@ -31,11 +31,11 @@ tf.logging.set_verbosity(tf.logging.ERROR)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = "3"
 os.environ["CUDA_VISIBLE_DEVICES"] = args.vg
 
-rl_keys = ["state", "action", "state_", "reward", "gae", "return", "sum_reward", "trajectory_len"]
+rl_keys = ["state", "action", "state_", "reward", "done", "sum_reward", "trajectory_len"]
+
 
 def worker(points_num, share_lock):
 
-    env.seed(os.getpid())
     pi = policy(have_model=True, action_space=act_dim, state_space=obs_dim)
 
     batch = {}
@@ -46,14 +46,13 @@ def worker(points_num, share_lock):
     while points_num.value <= args.points_num:
 
         s = env.reset()
-        s = (s - mean) / std
 
         traj_batch = {
             "state": [],
-            "actions": [],
+            "action": [],
             "reward": [],
-            "gae": [],
-            "value": []
+            "done": [],
+            "state_": []
         }
 
         step = 0
@@ -66,12 +65,12 @@ def worker(points_num, share_lock):
             a = ret["actions"]
 
             s_, r, done, info = env.step(a)
-            s_ = (s_-mean)/std
 
             traj_batch["state"].append(s)
+            traj_batch["state_"].append(s_)
             traj_batch["reward"].append(r)
-            traj_batch["actions"].append(ret["actions"])
-            traj_batch["value"].append(ret["value"])
+            traj_batch["action"].append(ret["actions"])
+            traj_batch["done"].append(done)
 
             s = s_
             step += 1
@@ -79,18 +78,12 @@ def worker(points_num, share_lock):
 
             if done:
 
-                v = pi.get_value(s_)
-                real_next = traj_batch["value"][1:] + [np.array(v)]
-                ret = pi.get_return(traj_batch["reward"])
-
-                gae = pi.get_gaes(traj_batch["reward"], traj_batch["value"], real_next)
-
                 batch["state"].append(traj_batch["state"])
                 batch["reward"].append(traj_batch["reward"])
-                batch["action"].append(traj_batch["actions"])
-                batch["gae"].append(gae)
-                batch["return"].append(ret)
-                batch["sum_reward"].append(sum(traj_batch["reward"]))
+                batch["action"].append(traj_batch["action"])
+                batch["state_"].append(traj_batch["state_"])
+                batch["done"].append(traj_batch["done"])
+                # batch["sum_reward"].append(ret[0])
                 batch["trajectory_len"].append(len(traj_batch["state"]))
 
                 share_lock.acquire()
@@ -99,76 +92,51 @@ def worker(points_num, share_lock):
 
                 break
 
-    # traj = 0
-    # while traj < 3:
-    #
-    #     s = (env.reset()-mean)/std
-    #
-    #     traj_batch = {
-    #         "reward": []
-    #     }
-    #
-    #     step = 0
-    #
-    #     while True:
-    #
-    #         a = pi.get_means(s)
-    #
-    #         s_, r, done, info = env.step(a)
-    #         s_ = (s_-mean)/std
-    #
-    #         traj_batch["reward"].append(r)
-    #
-    #         s = s_
-    #         step += 1
-    #
-    #         if done:
-    #             batch["sum_reward"].append(sum(traj_batch["reward"]))
-    #
-    #             traj += 1
-    #             break
+    traj = 0
+    while traj < 3:
+
+        s = env.reset()
+
+        traj_batch = {
+            "reward": []
+        }
+
+        step = 0
+
+        while True:
+
+            a = pi.get_means(s)
+
+            s_, r, done, info = env.step(a["actions"])
+
+            traj_batch["reward"].append(r)
+
+            s = s_
+            step += 1
+
+            if done:
+                batch["sum_reward"].append(sum(traj_batch["reward"]))
+
+                traj += 1
+                break
 
     return batch
 
 
 
-def train(batch):
+def train():
 
     pi = policy(have_model=True, action_space=act_dim, state_space=obs_dim)
-    pi.train(batch)
+    pi.train(buffer)
     pi.save_model()
 
 def create_model():
     pi = policy(have_model=False, action_space=act_dim, state_space=obs_dim)
     pi.save_model()
 
-
-def try_env():
-    state_list = []
-
-    while len(state_list) < 1000:
-        s = env.reset()
-
-        while True:
-
-            s,_,done,_ = env.step(env.action_space.sample())
-            state_list.append(s)
-
-            if done:
-                break
-
-    mean = np.mean(state_list,axis=0)
-    std = np.std(state_list,axis=0)
-
-    return mean, std
-
-
 if __name__ == "__main__":
 
     env = gym.make(args.env)
-
-    mean, std = try_env()
-    std[std==0] = 1
 
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.n
@@ -176,14 +144,13 @@ if __name__ == "__main__":
     print('Env Name:%s'%args.env)
     print("obs_space:", obs_dim)
     print("act_space:", act_dim)
-    print("Mean:",mean)
-    print("Std:",std)
 
     p = Process(target=create_model)
     p.start()
     p.join()
 
     iter = 0
+    buffer = replay_buffer(size=5e5, state_size=obs_dim)
 
     return_list = []
     import datetime
@@ -222,7 +189,18 @@ if __name__ == "__main__":
             for key in rl_keys:
                 batch[key] += res[key]
 
-        pro = Process(target=train, args=(batch,))
+        first_step_return = np.array(batch["sum_reward"])
+
+        traj_len = [len(s) for s in batch["state"]]
+
+        print('Return:')
+        print('length:\t%f, Mean:\t%f' % (sum(traj_len) / len(traj_len), first_step_return.mean()))
+        print('Max:\t%f, Min:\t%f' % (first_step_return.max(), first_step_return.min()))
+
+
+        buffer.append(batch)
+
+        pro = Process(target=train)
         pro.start()
         pro.join()
         first_step_return = np.array(batch["sum_reward"])
@@ -234,3 +212,5 @@ if __name__ == "__main__":
         print('------------------------------------------------------------\n')
 
     writer.close()
+
+

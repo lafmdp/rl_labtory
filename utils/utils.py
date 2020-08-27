@@ -112,7 +112,7 @@ def run_with_process_pool(func, keys, process_num, *args):
     for res in results:
 
         res = res.get()
-        for key in rl_keys:
+        for key in keys:
             batch[key] += res[key]
 
     return batch
