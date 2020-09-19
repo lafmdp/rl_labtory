@@ -7,23 +7,62 @@
 '''
 
 import os
-import copy
+import random
 import datetime
 import numpy as np
 import tensorflow as tf
 
 nowTime = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-hype_parameters = {
-    "gamma": 0.99,
-    "lamda": 0.95,
-    "epoch_num": 10,
-    "clip_value": 0.2,
-    "c_1": 2,
-    "c_2": 0.01,
-    "init_lr": 3e-4,
-    "lr_epsilon": 1e-6
-}
+class replay_buffer():
+
+    def __init__(self, size=100000, state_size=17):
+
+        self.size = size
+        self.batchsize=256
+        self.state_size = state_size
+
+        self.recorder = np.array([], dtype=np.float)
+
+    def append(self, batch):
+
+        sample_num = self.recorder.shape[0]
+        if  sample_num > self.size:
+            index = np.random.choice(sample_num, int(self.size), replace=False).tolist()
+            self.recorder = self.recorder[index]
+        else:
+            pass
+
+        s = np.vstack(batch["state"]).astype(np.float32).reshape((-1,self.state_size))
+        a = np.hstack(batch["action"]).astype(np.float32).reshape((-1,1))
+        s_ = np.vstack(batch["state_"]).astype(np.float32).reshape((-1, self.state_size))
+        r = np.hstack(batch["reward"]).astype(np.float32).reshape((-1,1))
+        done = np.hstack(batch["done"]).astype(np.float32).reshape((-1,1))
+
+        recorder = np.hstack((s, s_, a, r, done))
+
+        if sample_num == 0:
+            self.recorder = recorder.copy()
+        else:
+            self.recorder = np.vstack((self.recorder, recorder))
+
+    def sample(self):
+
+        sample_num = self.recorder.shape[0]
+        if sample_num < self.batchsize:
+            sample_index = np.random.choice(sample_num, self.batchsize, replace=True).tolist()
+        else:
+            sample_index = np.random.choice(sample_num, self.batchsize, replace=False).tolist()
+
+        ret = {
+            "s":self.recorder[sample_index, :self.state_size],
+            "s_":self.recorder[sample_index, self.state_size:2*self.state_size],
+            "a":self.recorder[sample_index, -3].astype(np.int),
+            "r":self.recorder[sample_index, -2],
+            "done":self.recorder[sample_index, -1]
+        }
+
+        return ret
 
 class policy():
 
@@ -47,16 +86,11 @@ class policy():
         self.model_name = model_name
         self.have_model = have_model
 
-        self.lamda = hype_parameters["lamda"]
-        self.gamma = hype_parameters["gamma"]
-        self.epoch_num = hype_parameters["epoch_num"]
-        self.clip_value = hype_parameters["clip_value"]
-        self.c_1 = hype_parameters["c_1"]
-        self.c_2 = hype_parameters["c_2"]
-        self.init_lr = hype_parameters["init_lr"]
-        self.lr_epsilon = hype_parameters["lr_epsilon"]
+        self.epislon = 0.05
+        self.learning_rate = 3e-4
+        self.gamma = 0.99
 
-        self.build_graph()
+        self.build_network()
 
         self.n_training = 0
 
@@ -69,110 +103,76 @@ class policy():
             else:
                 self.sess.run(tf.global_variables_initializer())
 
-    def build_graph(self):
+
+    def q_net(self, input, name):
+        with tf.variable_scope(name):
+            out = tf.layers.dense(input, 128, tf.nn.relu)
+            out = tf.layers.dense(out, 256, tf.nn.relu)
+            out = tf.layers.dense(out, 128, tf.nn.relu)
+            out = tf.layers.dense(out, 64, tf.nn.relu)
+
+            Q = tf.layers.dense(out, self.action_space, None)
+
+        return Q
+
+
+    def build_network(self):
         with self.sess.as_default(), self.graph.as_default():
-            with tf.variable_scope('policy'):
-                self.obs = tf.placeholder(dtype=tf.float32, shape=[None, self.state_space], name='obs')
-                self.global_step = tf.Variable(0, trainable=False)
-                self.learning_rate = tf.train.noisy_linear_cosine_decay(
-                    learning_rate=self.init_lr, decay_steps=100000, global_step=self.global_step,
-                    initial_variance=0.01, variance_decay=0.1, num_periods=0.2, alpha=0.05, beta=0.2)
-                self.add_global = self.global_step.assign_add(1)
+            self.state = tf.placeholder(dtype=tf.float32, shape=[None, self.state_space], name='obs')
+            self.rewards = tf.placeholder(dtype=tf.float32, shape=[None, ], name="reward_placeholder")
+            self.state_ = tf.placeholder(dtype=tf.float32, shape=[None, self.state_space], name="state__placeholder")
+            self.action = tf.placeholder(dtype=tf.int32, shape=[None, ], name="action_placeholder")
+            self.done = tf.placeholder(dtype=tf.float32, shape=[None, ], name="done_placeholder")
 
-                with tf.variable_scope("Net"):
-                    with tf.variable_scope('action'):
-                        out = tf.layers.dense(self.obs, 128, tf.nn.relu)
-                        out = tf.layers.dense(out, 256, tf.nn.relu)
-                        out = tf.layers.dense(out, 128, tf.nn.relu)
-                        out = tf.layers.dense(out, 64, tf.nn.relu)
+            with tf.variable_scope("q_function"):
+                self.q1 = self.q_net(self.state, "q1")
+                self.target_q1 = self.q_net(self.state_, "q1_target")
 
-                        self.action_probs = tf.layers.dense(out, self.action_space, tf.nn.softmax)
+                self.q2 = self.q_net(self.state, "q2")
+                self.target_q2 = self.q_net(self.state_, "q2_target")
 
-                        self.sthst_action = tf.reshape(tf.multinomial(tf.log(self.action_probs), num_samples=1), shape=[-1])
-                        self.detmnst_action = tf.reshape(tf.argmax(self.action_probs, axis=1), shape=[-1])
+                target_index = tf.stack([tf.range(tf.shape(self.action)[0], dtype=tf.int32),
+                                         tf.cast(tf.argmax(self.target_q1, axis=-1), dtype=tf.int32)], axis=1)
 
-                    with tf.variable_scope('value'):
-                        out2 = tf.layers.dense(inputs=self.obs, units=128, activation=tf.nn.relu)
-                        out2 = tf.layers.dense(inputs=out2, units=256, activation=tf.nn.relu)
-                        out2 = tf.layers.dense(inputs=out2, units=128, activation=tf.nn.relu)
-                        self.value = tf.layers.dense(inputs=out2, units=1, activation=None)
+                target = self.rewards + self.gamma * (1-self.done) * tf.gather_nd(self.target_q2, target_index)
+                target = tf.stop_gradient(target)
+
+                a_indices = tf.stack([tf.range(tf.shape(self.action)[0], dtype=tf.int32), self.action], axis=1)
+                q_eval = tf.gather_nd(params=self.q1, indices=a_indices)
+                q_eval2 = tf.gather_nd(params=self.q2, indices=a_indices)
+
+                self.loss = tf.reduce_mean((target-q_eval)**2) + \
+                            tf.reduce_mean((target - q_eval2) ** 2)
+
+                optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate)
+                self.train_op = optimizer.minimize(self.loss)
 
                 self.scope = tf.get_variable_scope().name
 
-            with tf.name_scope("policy_train"):
+            self.q1_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="q_function/q1")
+            self.target_q1_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="q_function/q1_target")
+            update_target = [tf.assign(t, q*0.01+t*0.99) for t,q in zip(self.target_q1_params, self.q1_params)]
 
-                with tf.name_scope('train_input'):
-                    self.returns = tf.placeholder(dtype=tf.float32, shape=[None, 1], name='reward_to_go')
-                    self.gaes = tf.placeholder(dtype=tf.float32, shape=[None], name='gaes')
-                    self.old_actions = tf.placeholder(tf.int32, [None], name='action_done')
-                    self.old_probs = tf.placeholder(tf.float32, [None], name='old_means')
-                    self.first_step_return = tf.placeholder(tf.float32, [None], name="first_return")
-                    self.trajectory_len = tf.placeholder(tf.float32, [None], name="traj_len")
-                    self.batch_lr = tf.placeholder(tf.float32, [None], name="batch_learning_rate")
-                    self.batch_actor_loss = tf.placeholder(tf.float32, [None], name="batch_a_loss")
-                    self.batch_critic_loss = tf.placeholder(tf.float32, [None], name="batch_c_loss")
-
-                with tf.name_scope('loss_and_train'):
-                    with tf.name_scope('policy_loss'):
-                        act = tf.one_hot(indices=self.old_actions, depth=self.action_space)
-                        self.specific_probs = tf.reduce_sum(self.action_probs * act, axis=-1)
-
-                        ratios = tf.exp(tf.log(self.specific_probs+ 1e-10) - tf.log(self.old_probs + 1e-10) )
-                        clipped_ratios = tf.clip_by_value(ratios,
-                                                          clip_value_min=1 - self.clip_value,
-                                                          clip_value_max=1 + self.clip_value,
-                                                          name='clip_ratios')
-                        loss_clip = tf.minimum(tf.multiply(self.gaes, ratios), tf.multiply(self.gaes, clipped_ratios))
-                        self.actor_loss = -tf.reduce_mean(loss_clip)
-
-                    with tf.name_scope('value_loss'):
-                        self.critic_loss = tf.losses.mean_squared_error(self.returns, self.value)
-
-
-                    with tf.name_scope('total_loss'):
-                        total_loss = self.actor_loss + self.c_1 * self.critic_loss
-
-                    optimizer = tf.train.AdamOptimizer(learning_rate=self.learning_rate, epsilon=self.lr_epsilon)
-
-                    self.train_op = optimizer.minimize(total_loss)
-
-
-    def get_gaes(self, rewards, v_preds, v_preds_next):
-
-        deltas = [r_t + hype_parameters["gamma"] * v_next - v for r_t, v_next, v in zip(rewards, v_preds_next, v_preds)]
-        # calculate generative advantage estimator(lambda = 1), see ppo paper eq(11)
-        gaes = copy.deepcopy(deltas)
-        for t in reversed(range(len(gaes) - 1)):  # is T-1, where T is time step which run policy
-            gaes[t] = gaes[t] + hype_parameters["gamma"] * hype_parameters["lamda"] * gaes[t + 1]
-
-        return gaes
-
-    def get_return(self, rewards):
-
-        dis_rewards = np.zeros_like(rewards).astype(np.float32)
-        running_add = 0
-        for t in reversed(range(len(rewards))):
-            running_add = running_add * hype_parameters["gamma"] + rewards[t]
-            dis_rewards[t] = running_add
-
-        return dis_rewards
-
+            self.q2_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="q_function/q2")
+            self.target_q2_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="q_function/q2_target")
+            self.update_target = update_target + [tf.assign(t, q*0.01+t*0.99) for t, q in zip(self.target_q2_params, self.q2_params)]
 
     def get_action(self, obs):
-        with self.sess.as_default(), self.graph.as_default():
-            obs = np.array(obs)
+        import random
 
-            if obs.shape[0] != 1:
-                obs = obs[np.newaxis, :]
-
-            actions, value, action_prob = \
-                self.sess.run([self.sthst_action, self.value, self.action_probs], feed_dict={self.obs: obs})
-
-
+        if random.uniform(0,1) < self.epislon:
             ret = {
-                "actions": actions[0],
-                "value": value.tolist()[0][0]
+                "actions": random.randint(0, self.action_space-1)
             }
+        else:
+            with self.sess.as_default(), self.graph.as_default():
+                obs = np.array(obs).reshape((1,-1))
+
+                q1, q2 = self.sess.run([self.q1, self.q2], feed_dict={self.state: obs})
+
+                ret = {
+                    "actions": (q1+q2)[0].argmax()
+                }
 
         return ret
 
@@ -180,109 +180,37 @@ class policy():
     def get_means(self, obs):
 
         with self.sess.as_default(), self.graph.as_default():
-            obs = np.array(obs)
+            obs = np.array(obs).reshape((1, -1))
 
-            if obs.shape[0] != 1:
-                obs = obs[np.newaxis, :]
+            q1,q2 = self.sess.run([self.q1,self.q2], feed_dict={self.state: obs})
 
-            actions = self.sess.run(self.detmnst_action, feed_dict={self.obs: obs})
+            ret = {
+                "actions": (q1+q2)[0].argmax()
+            }
 
-        return actions[0]
+        return ret
 
-    def get_value(self, obs):
-
-        with self.sess.as_default(), self.graph.as_default():
-            obs = np.array(obs)
-
-            if obs.shape[0] != 1:
-                obs = obs[np.newaxis, :]
-
-            value = self.sess.run(self.value, feed_dict={self.obs: obs})
-
-        return value.tolist()[0][0]
 
     def get_variables(self):
         with self.sess.as_default(), self.graph.as_default():
             return tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, self.scope)
 
-    def train(self, batch):
+
+    def train(self, buffer):
         with self.sess.as_default(), self.graph.as_default():
+            # self.sess.run(self.update_target)
 
-            # convert list to numpy array
-            state = np.vstack(batch["state"]).astype(np.float32).squeeze()
-            old_action = np.hstack(batch["action"]).astype(dtype=np.float32).reshape([-1,1])
-            gae = np.hstack(batch["gae"]).astype(np.float32).reshape([-1,1])
-            ret = np.hstack(batch["return"]).astype(dtype=np.float32).reshape([-1,1])
-            first_step_return = np.array(batch["sum_reward"])
-            trajectory_len = np.array(batch["trajectory_len"])
+            for _ in range(1000):
+                sample = buffer.sample()
 
+                loss, _, _ = self.sess.run([self.loss, self.train_op, self.update_target], feed_dict={
+                    self.state:sample["s"],
+                    self.state_:sample["s_"],
+                    self.action:sample["a"].squeeze(),
+                    self.done:sample["done"].squeeze(),
+                    self.rewards:sample["r"].squeeze()
+                })
 
-
-            traj_len = [len(s) for s in batch["state"]]
-
-            print('Return:')
-            print('length:\t%f, Mean:\t%f' % (sum(traj_len)/len(traj_len), first_step_return.mean()))
-            print('Max:\t%f, Min:\t%f' % (first_step_return.max(), first_step_return.min()))
-
-            old_prob = self.sess.run(self.specific_probs, feed_dict={self.obs: state, self.old_actions: old_action.squeeze()})
-            old_prob = np.array(old_prob, dtype=np.float32).reshape([-1,1])
-
-            s_s = self.state_space
-
-            batch_size = state.shape[0] // 10
-
-            actor_loss = []
-            critic_loss = []
-            learning_r = []
-
-            dataset = np.hstack((state, old_action, old_prob, gae, ret))
-
-            for i in range(self.epoch_num):
-
-                np.random.shuffle(dataset)
-
-                states = dataset[:, :s_s]
-                old_actions = dataset[:, -4]
-                old_probs = dataset[:, -3]
-                gaes = dataset[:, -2]
-                rets = dataset[:, -1]
-
-                gaes = np.squeeze(gaes)
-                rets = rets[:, np.newaxis]
-
-                sample_num = dataset.shape[0]
-
-                start = 0
-                end = min(start + batch_size, sample_num)
-
-                while start < sample_num:
-                    if end - start <= 100:
-                        break
-                    try:
-                        a_loss, c_loss, lr, _, _ = \
-                            self.sess.run([self.actor_loss,
-                                           self.critic_loss,
-                                           self.learning_rate,
-                                           self.train_op,
-                                           self.add_global],
-                                          feed_dict={self.obs: states[start:end],
-                                                     self.returns: rets[start:end],
-                                                     self.gaes: gaes[start:end],
-                                                     self.old_actions: old_actions[start:end].squeeze(),
-                                                     self.old_probs: old_probs[start:end].squeeze()})
-
-                        actor_loss.append(a_loss)
-                        critic_loss.append(c_loss)
-                        learning_r.append(lr.mean())
-
-
-                    except Exception as e:
-                        print(e)
-                        print("start:", start)
-                        print("end:", end)
-
-                    start += batch_size
-                    end = min(start + batch_size, sample_num)
 
     def save_model(self):
 

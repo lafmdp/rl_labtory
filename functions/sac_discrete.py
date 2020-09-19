@@ -140,7 +140,7 @@ class policy():
                 # Main outputs from computation graph
                 with tf.variable_scope('main'):
                     self.mu, self.pi, pi_entropy, self.pi_logits, self.q1_logits, \
-                    q2_logits, q1_a, q2_a, q1_pi, self.q2_pi = \
+                    q2_logits, q1_a, q2_a, q1_pi, q2_pi = \
                         a_out_mlp_actor_critic(self.x_ph, self.a_ph, alpha, **network_params)
 
                 # Target value network
@@ -237,11 +237,6 @@ class policy():
             values = batch["acts"].astype(np.int32)
             n_values = self.action_space
             action_one_hot = np.eye(n_values)[values].squeeze()
-
-            # print("obs1 shape", batch["obs1"].shape)
-            # print("obs2 shape", batch["obs2"].shape)
-            # print("rews shape", batch["rews"].shape)
-            # print("done shape", batch["done"].shape)
 
             feed_dict = {self.x_ph: batch['obs1'],
                          self.x2_ph: batch['obs2'],

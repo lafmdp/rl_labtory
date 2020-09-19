@@ -12,7 +12,7 @@ import datetime
 import numpy as np
 import tensorflow as tf
 
-nowTime = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+nowTime = datetime.datetime.now().strftime('%Y-%m-%d%H:%M:%S')
 
 hype_parameters = {
     "gamma": 0.99,
@@ -74,10 +74,7 @@ class policy():
             with tf.variable_scope('policy'):
                 self.obs = tf.placeholder(dtype=tf.float32, shape=[None, self.state_space], name='obs')
                 self.global_step = tf.Variable(0, trainable=False)
-                self.learning_rate = tf.train.noisy_linear_cosine_decay(
-                    learning_rate=self.init_lr, decay_steps=100000, global_step=self.global_step,
-                    initial_variance=0.01, variance_decay=0.1, num_periods=0.2, alpha=0.05, beta=0.2)
-                self.add_global = self.global_step.assign_add(1)
+                self.learning_rate = self.init_lr
 
                 with tf.variable_scope("Net"):
                     with tf.variable_scope('action'):
@@ -167,7 +164,6 @@ class policy():
 
             actions, value, action_prob = \
                 self.sess.run([self.sthst_action, self.value, self.action_probs], feed_dict={self.obs: obs})
-
 
             ret = {
                 "actions": actions[0],
@@ -259,12 +255,10 @@ class policy():
                     if end - start <= 100:
                         break
                     try:
-                        a_loss, c_loss, lr, _, _ = \
+                        a_loss, c_loss, _ = \
                             self.sess.run([self.actor_loss,
                                            self.critic_loss,
-                                           self.learning_rate,
-                                           self.train_op,
-                                           self.add_global],
+                                           self.train_op],
                                           feed_dict={self.obs: states[start:end],
                                                      self.returns: rets[start:end],
                                                      self.gaes: gaes[start:end],
@@ -273,7 +267,7 @@ class policy():
 
                         actor_loss.append(a_loss)
                         critic_loss.append(c_loss)
-                        learning_r.append(lr.mean())
+                        # learning_r.append(lr.mean())
 
 
                     except Exception as e:
